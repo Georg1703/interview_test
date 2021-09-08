@@ -8,7 +8,6 @@ import asyncio
 import json
 import os
 import re
-import time
 from flask import Response
 
 cluster = MongoClient('mongodb://localhost:27017/?readPreference=primary&appname=MongoDB%20Compass&directConnection=true&ssl=false')
@@ -20,19 +19,6 @@ db = cluster['test']
 collection = db['test']
 
 
-@app.route('/get_adverts')
-def step_one():
-    r = requests.get('https://partners-api.999.md/adverts?page_size=10&page=1', auth=HTTPBasicAuth('apuUo-UF6yhfoNVVTKWrb5Z8ecru', ''))
-    return r.json()
-
-
-@app.route('/save_adverts_to_db')
-def save_adverts_to_db():
-    r = requests.get('https://partners-api.999.md/adverts?page_size=10&page=1', auth=HTTPBasicAuth('apuUo-UF6yhfoNVVTKWrb5Z8ecru', ''))
-    collection.insert_one(r.json())
-    return 'success'
-
-
 def get_eur_price():
     req = requests.get('https://www.bnm.md/ro')
     x = re.search(r"EUR[\s\S]*?class=\"rate down\">(.*?)</span>", req.text).group(1)
@@ -41,15 +27,14 @@ def get_eur_price():
 
 async def get(url):
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, auth=aiohttp.BasicAuth('apuUo-UF6yhfoNVVTKWrb5Z8ecru', '')) as response:
+        async with session.get(url, auth=aiohttp.BasicAuth(os.environ['API_TOKEN']  , '')) as response:
             data = await response.read()
             return data
 
 
-@app.route('/convert_and_save')
-def convert_and_save():
-    eur_price = get_eur_price()
-    json_data = db.test.find_one()
+def get_adverts_info():
+    r = requests.get('https://partners-api.999.md/adverts?page_size=10&page=1', auth=HTTPBasicAuth(os.environ['API_TOKEN'], ''))
+    json_data = r.json()
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -61,10 +46,63 @@ def convert_and_save():
 
     result = loop.run_until_complete(asyncio.gather(*coroutines))
 
-    for advert in result[:2]:
-        print('-------')
-        data = json.loads(advert)
-        if data['price']['unit'] == 'eur':
-            data['price']['unit'] = 'mdl'
-            data['price']['value'] = float(data['price']['value']) * eur_price
-        collection.insert_one(data)
+    return result
+
+
+def convert_eur_to_mdl(advert):
+    eur_price = get_eur_price()
+
+    data = json.loads(advert)
+    if data['price']['unit'] == 'eur':
+        data['price']['unit'] = 'mdl'
+        data['price']['value'] = float(data['price']['value']) * eur_price
+
+    return data
+
+
+@app.route('/step_1')
+def get_adverts():
+    r = requests.get('https://partners-api.999.md/adverts?page_size=10&page=1', auth=HTTPBasicAuth(os.environ['API_TOKEN'], ''))
+    return r.json()
+
+
+@app.route('/step_2')
+def save_adverts_to_db():
+    r = requests.get('https://partners-api.999.md/adverts?page_size=10&page=1', auth=HTTPBasicAuth(os.environ['API_TOKEN'], ''))
+    inserted_id = collection.insert_one(r.json()).inserted_id
+    if inserted_id:
+        return f'success, inserted id {inserted_id}'
+
+
+@app.route('/step_3')
+def convert_and_save_to_db():
+    adverts = get_adverts_info()
+    for advert in adverts:
+        advert = convert_eur_to_mdl(advert)
+        collection.insert_one(advert)
+
+    return 'success'
+
+
+@app.route('/step_4')
+def tracking_changes():
+    adverts = get_adverts_info()
+
+    for advert in adverts[:2]:
+        advert = convert_eur_to_mdl(advert)
+        advert_exist = collection.find_one({'id': advert['id']})
+
+        print(advert['id'])
+
+        if advert_exist: del advert_exist['_id']
+
+        if advert_exist and advert == advert_exist:
+            print('exist and equal')
+            continue
+        elif advert_exist:
+            print('exist and not equal')
+            collection.delete_one(advert_exist)
+
+        collection.insert_one(advert)
+    
+    return 'success'
