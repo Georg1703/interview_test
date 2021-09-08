@@ -9,9 +9,11 @@ import json
 import os
 import re
 from flask import Response
+from elasticsearch import Elasticsearch
 
 cluster = MongoClient('mongodb://localhost:27017/?readPreference=primary&appname=MongoDB%20Compass&directConnection=true&ssl=false')
 
+es = Elasticsearch()
 
 app = Flask(__name__)
 
@@ -106,3 +108,43 @@ def tracking_changes():
         collection.insert_one(advert)
     
     return 'success'
+
+mapping = {
+    "settings": {
+        "number_of_shards": 2,
+        "number_of_replicas": 1
+    },
+    "mappings": {
+        "properties": {
+            "some_string": {
+                "type": "text" # formerly "string"
+            },
+            "some_bool": {
+                "type": "boolean"
+            },
+            "some_int": {
+                "type": "integer"
+            },
+            "some_more_text": {
+                "type": "text"
+            }
+        }
+    }
+}
+
+es.indices.create(index="adveasdfsdfrts", body=mapping)
+
+
+@app.route('/step_5')
+def synchronize_with_es():
+    adverts = collection.find()
+
+    i = 1
+    for advert in adverts:
+        del advert['_id']
+        print(advert)
+        print('\n\n\n')
+        es.index(index='adveasdfsdfrts', doc_type='adverts', id=i, body=mapping)
+        i += 1
+
+    print(es.get(index='adveasdfsdfrts', doc_type='adverts', id=1))
